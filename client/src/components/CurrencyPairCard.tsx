@@ -1,4 +1,4 @@
-import { CurrencyPair } from '../types/types';
+import { CurrencyPair } from '../../../shared/types/types';;
 
 interface CurrencyPairCardProps {
     pair: CurrencyPair;

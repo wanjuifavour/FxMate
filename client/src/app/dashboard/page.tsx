@@ -1,39 +1,130 @@
-"use client"
+'use client'
 
 import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { TrendingUp, Bell, Settings, Search, ArrowUpRight, ArrowDownRight } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import type { CurrencyPair } from '../../types/types';
+import { AlertCard } from '@/components/AlertCard';
+import { AlertDialog, AlertDialogAction, AlertDialogContent, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
+import type { CurrencyPair, Alert } from '@/types/types';
+import PriceChart from '@/components/PriceChart';
+import io from 'socket.io-client';
+
+const socket = io('http://localhost:8085', {
+    auth: { token: localStorage.getItem('token') }
+});
+
+interface PriceData {
+    time: number;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    volume?: number;
+}
 
 const Dashboard = () => {
-    const [pairs, setPairs] = useState<CurrencyPair[]>([]);
-    const [loading, setLoading] = useState(true);
+    const router = useRouter();
+    // const [socket, setSocket] = useState<any>(null);
+    const [chartType, setChartType] = useState<'candlestick' | 'line'>('candlestick');
+    const [chartData, setChartData] = useState<PriceData[]>([]);
+    const [interval, setInterval] = useState<'1m' | '5m' | '15m' | '1h' | '4h' | '1d'>('1m');
+    const [pairs, setPairs] = useState<Record<string, {
+        bidPrice: number;
+        askPrice: number;
+        midPrice: number;
+        isUp: boolean;
+        change24h: number;
+    }>>({});
+    const [loading, setLoading] = useState(false);
+    const [showAlertCard, setShowAlertCard] = useState(false);
     const [selectedPair, setSelectedPair] = useState('EUR/USD');
+    const [alerts, setAlerts] = useState<Alert[]>([]);
+    const [newAlert, setNewAlert] = useState<Alert>({ id: '', isActive: true, pair: selectedPair, condition: 'above', targetRate: 0 });
 
     useEffect(() => {
-        const fetchData = async () => {
-            try {
-                const response = await fetch('/api/forex/pairs');
-                const data = await response.json();
-                setPairs(data);
-            } catch (error) {
-                console.error('Error fetching data:', error);
-                // Sample data if API is non existent/fails
-                setPairs([
-                    { base: 'EUR', quote: 'USD', rate: 1.0865, change24h: 0.05, isUp: true },
-                    { base: 'GBP', quote: 'USD', rate: 1.2634, change24h: -0.12, isUp: false },
-                    { base: 'USD', quote: 'JPY', rate: 148.05, change24h: 0.28, isUp: true },
-                    { base: 'USD', quote: 'CHF', rate: 0.8845, change24h: -0.03, isUp: false },
-                ]);
-            } finally {
+        // const token = localStorage.getItem('token');
+        // if (!token) {
+        //     router.push('/dashboard');
+        //     return;
+        // }
+
+        
+
+        socket.on('connect', () => {
+            console.log('Socket connected');
+            socket.emit('subscribePairs', ['EUR/USD', 'GBP/USD', 'USD/JPY', 'USD/CHF']);
+        });
+
+        socket.on('forexUpdate', (data) => {
+            console.log('Received forex update:', data);
+            setPairs(prevPairs => {
+                const prevPairData = prevPairs[data.ticker];
+                return {
+                    ...prevPairs,
+                    [data.ticker.toUpperCase()]: {
+                        bidPrice: data.bidPrice,
+                        askPrice: data.askPrice,
+                        midPrice: data.midPrice,
+                        isUp: prevPairData ? data.midPrice > prevPairData.midPrice : true,
+                        change24h: prevPairData 
+                            ? ((data.midPrice - prevPairData.midPrice) / prevPairData.midPrice) * 100 
+                            : 0
+                    }
+                };
+            });
+            setLoading(false);
+        });
+
+        console.log('Requesting historical data for:', selectedPair, interval);
+        // Convert pair format from EUR/USD to eurusd for the backend
+        const formattedPair = selectedPair.toLowerCase().replace('/', '');
+        
+        socket.emit('getHistoricalData', { 
+            pair: formattedPair, 
+            interval 
+        });
+
+        socket.on('historicalData', (data: PriceData[]) => {
+            console.log('Received historical data:', data);
+            if (data && data.length > 0) {
+                setChartData(data);
                 setLoading(false);
             }
-        };
+        });
+        socket.on('connect_error', (error) => {
+            console.error('Socket.IO error:', error);
+            setLoading(false);
+        });
 
-        fetchData();
-        const interval = setInterval(fetchData, 5000);
-        return () => clearInterval(interval);
+
+        return () => {
+            socket.close();
+        };
     }, []);
+    
+    const handleCreateAlert = (newAlert: Alert) => {
+        setAlerts([...alerts, newAlert]);
+        setShowAlertCard(false);
+    };
+
+    const handleDeleteAlert = (id: string) => {
+        setAlerts(alerts.filter(alert => alert.id !== id));
+    };
+
+    const handleToggleAlert = (id: string) => {
+        setAlerts(alerts.map(alert => alert.id === id ? { ...alert, isActive: !alert.isActive } : alert));
+    };
+
+    const [isMounted, setIsMounted] = useState(false);
+
+    useEffect(() => {
+        setIsMounted(true);
+    }, []);
+
+    if (!isMounted) {
+        return <div>Loading dashboard...</div>;
+    }
 
     return (
         <div className="min-h-screen bg-background">
@@ -65,7 +156,7 @@ const Dashboard = () => {
                             className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                         />
                     </div>
-                    <button className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors">
+                    <button className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors" onClick={() => setShowAlertCard(true)}>
                         Create Alert
                     </button>
                 </div>
@@ -78,21 +169,24 @@ const Dashboard = () => {
                     <>
                         {/* Popular Pairs Grid */}
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-                            {pairs.map((pair) => (
+                            {Object.entries(pairs).map(([ticker, data]) => (
                                 <Card
-                                    key={`${pair.base}${pair.quote}`}
+                                    key={ticker}
                                     className="hover:shadow-lg transition-shadow cursor-pointer"
-                                    onClick={() => setSelectedPair(`${pair.base}/${pair.quote}`)}
+                                    onClick={() => {
+                                        setSelectedPair(ticker);
+                                        setNewAlert({ ...newAlert, pair: ticker });
+                                    }}
                                 >
                                     <CardHeader className="pb-2">
-                                        <CardTitle className="text-lg">{`${pair.base}/${pair.quote}`}</CardTitle>
+                                        <CardTitle className="text-lg">{ticker}</CardTitle>
                                     </CardHeader>
                                     <CardContent>
                                         <div className="flex justify-between items-center">
-                                            <span className="text-2xl font-semibold">{pair.rate}</span>
-                                            <div className={`flex items-center ${pair.isUp ? 'text-green-500' : 'text-red-500'}`}>
-                                                {pair.isUp ? <ArrowUpRight className="h-5 w-5" /> : <ArrowDownRight className="h-5 w-5" />}
-                                                <span className="ml-1">{Math.abs(pair.change24h)}%</span>
+                                            <span className="text-2xl font-semibold">{data.midPrice.toFixed(4)}</span>
+                                            <div className={`flex items-center ${data.isUp ? 'text-green-500' : 'text-red-500'}`}>
+                                                {data.isUp ? <ArrowUpRight className="h-5 w-5" /> : <ArrowDownRight className="h-5 w-5" />}
+                                                <span className="ml-1">{Math.abs(data.change24h).toFixed(2)}%</span>
                                             </div>
                                         </div>
                                     </CardContent>
@@ -107,7 +201,7 @@ const Dashboard = () => {
                                     <CardTitle>Price Chart - {selectedPair}</CardTitle>
                                 </CardHeader>
                                 <CardContent className="h-96">
-                                    {/* PriceChart component will be rendered here */}
+                                    <PriceChart pair={selectedPair} socket={socket} setChartType={setChartType} chartData={chartData} loading={loading} interval={interval} />
                                 </CardContent>
                             </Card>
 
@@ -123,6 +217,40 @@ const Dashboard = () => {
                     </>
                 )}
             </main>
+
+            {showAlertCard && (
+                <AlertDialog open={showAlertCard} onOpenChange={setShowAlertCard}>
+                <AlertDialogContent>
+                        <AlertDialogHeader>
+                            <AlertDialogTitle>Create Alert</AlertDialogTitle>
+                        </AlertDialogHeader>
+                        <div className="my-4">
+                            <AlertCard
+                                alert={newAlert}
+                                onCreateAlert={handleCreateAlert}
+                                onDelete={handleDeleteAlert}
+                                onToggle={handleToggleAlert}
+                            />
+                        </div>
+                        <AlertDialogAction
+                            className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+                            onClick={() => setShowAlertCard(false)}
+                        >
+                            Close
+                        </AlertDialogAction>
+                    </AlertDialogContent>
+                </AlertDialog>
+            )}
+
+            {/* Render existing alerts */}
+            {alerts.map(alert => (
+                <AlertCard
+                    key={alert.id}
+                    alert={alert}
+                    onDelete={handleDeleteAlert}
+                    onToggle={handleToggleAlert}
+                />
+            ))}
         </div>
     );
 };

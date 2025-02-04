@@ -1,0 +1,39 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  name      String?
+  password  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ForexPair {
+  id        String   @id
+  lastPrice Float
+  bidPrice  Float
+  askPrice  Float
+  updatedAt DateTime @updatedAt
+}
+
+model CandleStick {
+  id        Int      @id @default(autoincrement())
+  pair      String
+  timestamp DateTime
+  open      Float
+  high      Float
+  low       Float
+  close     Float
+  volume    Int
+  interval  String
+
+  @@unique([pair, timestamp, interval])
+}
